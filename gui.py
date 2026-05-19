@@ -71,13 +71,23 @@ class MacroEngine:
         cfg = self._cfg
         while self.running and not self._stop.is_set():
 
-            # ── 1. 스킬키 꾹 홀드 ──────────────────────
+            # ── 1. 스킬키 반복 press/release (홀드 효과) ─
+            # kb.press() 한 번만으론 게임이 오래 못 인식 →
+            # 실제 키보드처럼 짧게 반복 입력해야 홀드로 동작
             hold = random.uniform(cfg["hold_min"], cfg["hold_max"])
             self.log(f"[스킬] {cfg['attack_key'].upper()} 키 {hold:.1f}초 홀드")
-            kb.press(self._attack_key)
-            if not self._sleep(hold):
+            deadline = time.time() + hold
+            while time.time() < deadline:
+                if not self.running or self._stop.is_set():
+                    break
+                kb.press(self._attack_key)
+                time.sleep(0.05)
+                kb.release(self._attack_key)
+                time.sleep(0.03)
+            else:
+                pass
+            if not self.running or self._stop.is_set():
                 break
-            kb.release(self._attack_key)
 
             # ── 2. 살짝 이동 후 정확히 제자리 복귀 ────
             go  = Key.left  if self._last_dir == "left" else Key.right
