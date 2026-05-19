@@ -13,6 +13,7 @@ from pynput import keyboard
 from pynput.keyboard import Key, Controller
 
 kb = Controller()
+kb_lock = threading.Lock()   # 두 스레드가 동시에 키 입력하면 충돌 → 순서 보장
 
 def _parse_key(key_str):
     special = {
@@ -80,9 +81,10 @@ class MacroEngine:
             while time.time() < deadline:
                 if not self.running or self._stop.is_set():
                     break
-                kb.press(self._attack_key)
-                time.sleep(0.05)
-                kb.release(self._attack_key)
+                with kb_lock:
+                    kb.press(self._attack_key)
+                    time.sleep(0.05)
+                    kb.release(self._attack_key)
                 time.sleep(0.03)
             else:
                 pass
@@ -166,9 +168,10 @@ class NormalAttackEngine:
             for _ in range(count):
                 if not self.running or self._stop.is_set():
                     break
-                kb.press(key)
-                time.sleep(0.06)
-                kb.release(key)
+                with kb_lock:   # 스킬 루프 멈추고 평타 먼저 입력
+                    kb.press(key)
+                    time.sleep(0.06)
+                    kb.release(key)
                 time.sleep(random.uniform(0.08, 0.15))  # 타격 간 랜덤 딜레이
 
             # 다음 발동까지 대기 (±10% 랜덤으로 자연스럽게)
