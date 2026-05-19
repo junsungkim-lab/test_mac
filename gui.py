@@ -122,6 +122,63 @@ class MacroEngine:
         self.log("[정지] 매크로 종료됨")
 
 
+# ── 평타 엔진 (매크로 감지 몬스터 처리) ──────────────────
+class NormalAttackEngine:
+    def __init__(self, log_fn):
+        self.log = log_fn
+        self.running = False
+        self._thread = None
+        self._stop = threading.Event()
+
+    def start(self, cfg):
+        if self.running:
+            return
+        self._cfg = cfg
+        self.running = True
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self.running = False
+        self._stop.set()
+
+    def _sleep(self, seconds):
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if not self.running or self._stop.is_set():
+                return False
+            time.sleep(0.05)
+        return True
+
+    def _loop(self):
+        cfg = self._cfg
+        key = _parse_key(cfg["normal_key"])
+        interval = cfg["normal_interval"]
+        count    = cfg["normal_count"]
+
+        # 첫 발동 전 interval만큼 대기
+        if not self._sleep(interval):
+            return
+
+        while self.running and not self._stop.is_set():
+            self.log(f"[평타] {cfg['normal_key'].upper()} 키 {count}회 입력")
+            for _ in range(count):
+                if not self.running or self._stop.is_set():
+                    break
+                kb.press(key)
+                time.sleep(0.06)
+                kb.release(key)
+                time.sleep(random.uniform(0.08, 0.15))  # 타격 간 랜덤 딜레이
+
+            # 다음 발동까지 대기 (±10% 랜덤으로 자연스럽게)
+            jitter = interval * random.uniform(-0.1, 0.1)
+            if not self._sleep(interval + jitter):
+                break
+
+        self.log("[평타] 평타 종료됨")
+
+
 # ── GUI ───────────────────────────────────────────────
 BG   = "#1e1e2e"
 BOX  = "#313244"
@@ -137,7 +194,8 @@ class App(tk.Tk):
         self.title("스터디 타이머 알림")
         self.resizable(False, False)
         self.configure(bg=BG)
-        self.engine = MacroEngine(self._log)
+        self.engine  = MacroEngine(self._log)
+        self.natk    = NormalAttackEngine(self._log)
         self._build_ui()
         self._start_hotkey_listener()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -231,6 +289,57 @@ class App(tk.Tk):
 
         self._sep()
 
+        # ── 평타 섹션 ─────────────────────────────────
+        tk.Label(self, text="  매크로 감지 몬스터 처리 (평타)",
+                 font=("맑은 고딕", 10, "bold"), fg=BLU, bg=BG,
+                 anchor="w").pack(fill="x", padx=16, pady=(6, 0))
+        tk.Label(self, text="  스킬 홀드와 별개로 주기적으로 평타 키를 자동 입력",
+                 font=("맑은 고딕", 8), fg=GRAY, bg=BG,
+                 anchor="w").pack(fill="x", padx=16)
+
+        frm2 = tk.Frame(self, bg=BG)
+        frm2.pack(fill="x", padx=16, pady=6)
+
+        def field2(title, desc, default, row):
+            tk.Label(frm2, text=title, font=("맑은 고딕", 10, "bold"),
+                     fg=FG, bg=BG, anchor="w").grid(
+                row=row*2, column=0, sticky="w", pady=(8,0))
+            tk.Label(frm2, text=desc, font=("맑은 고딕", 8),
+                     fg=GRAY, bg=BG, anchor="w").grid(
+                row=row*2+1, column=0, sticky="w")
+            var = tk.StringVar(value=default)
+            tk.Entry(frm2, textvariable=var, width=8,
+                     bg=BOX, fg=FG, insertbackground=FG,
+                     relief="flat", font=("Consolas", 10)).grid(
+                row=row*2, column=1, rowspan=2, padx=(16, 0), sticky="w")
+            return var
+
+        self.v_normal_key      = field2(
+            "평타 키",
+            "평타에 설정된 키 (예: ctrl, x, c)",
+            "ctrl", 0)
+        self.v_normal_interval = field2(
+            "평타 주기 (초)",
+            "몇 초마다 한 번씩 평타를 때릴지",
+            "60", 1)
+        self.v_normal_count    = field2(
+            "평타 횟수",
+            "한 번 발동할 때 몇 번 연속으로 때릴지",
+            "3", 2)
+
+        # 평타 ON/OFF 토글 버튼
+        natk_frm = tk.Frame(self, bg=BG)
+        natk_frm.pack(pady=(4, 0))
+        self._natk_btn = tk.Button(
+            natk_frm, text="▶  평타 ON",
+            font=("맑은 고딕", 10, "bold"),
+            bg=BLU, fg="#1e1e2e", relief="flat",
+            padx=16, pady=6, cursor="hand2",
+            command=self._toggle_natk)
+        self._natk_btn.pack()
+
+        self._sep()
+
         # ── 버튼 ─────────────────────────────────────
         btn_frm = tk.Frame(self, bg=BG)
         btn_frm.pack(pady=10)
@@ -293,6 +402,20 @@ class App(tk.Tk):
                       f"홀드:{cfg['hold_min']}~{cfg['hold_max']}s "
                       f"이동:{cfg['move_min']}~{cfg['move_max']}s")
 
+    def _toggle_natk(self):
+        if self.natk.running:
+            self.natk.stop()
+            self._natk_btn.config(text="▶  평타 ON", bg=BLU)
+            self._log("[평타] 평타 비활성화")
+        else:
+            cfg = self._read_cfg()
+            if cfg is None:
+                return
+            self.natk.start(cfg)
+            self._natk_btn.config(text="■  평타 OFF", bg=RED)
+            self._log(f"[평타] {cfg['normal_key'].upper()} 키 "
+                      f"{cfg['normal_interval']}초마다 {cfg['normal_count']}회")
+
     def _read_cfg(self):
         try:
             return {
@@ -304,6 +427,9 @@ class App(tk.Tk):
                 "pause_min":        float(self.v_pause_min.get()),
                 "pause_max":        float(self.v_pause_max.get()),
                 "after_skill_delay": float(self.v_after_skill.get()),
+                "normal_key":      self.v_normal_key.get().strip() or "ctrl",
+                "normal_interval": float(self.v_normal_interval.get()),
+                "normal_count":    int(self.v_normal_count.get()),
             }
         except ValueError:
             self._log("[오류] 숫자를 올바르게 입력하세요.")
@@ -323,6 +449,7 @@ class App(tk.Tk):
 
     def _on_close(self):
         self.engine.stop()
+        self.natk.stop()
         self.destroy()
 
 
