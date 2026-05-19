@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-메이플랜드 맥 전용 매크로
-  F8  — 매크로 ON/OFF 토글
-  F9  — 완전 종료
+메이플랜드 매크로 (Windows/Mac 공용)
+
+동작 방식:
+  1. 공격키를 꾹 홀드 (keydown 상태 유지)
+  2. 랜덤 시간 후 홀드 해제 → 좌우로 살짝 이동
+  3. 다시 공격키 홀드 → 반복
+
+  F8 — ON/OFF 토글
+  F9 — 완전 종료
 """
 
 import time
@@ -17,7 +23,7 @@ import config
 kb = Controller()
 running = False
 stop_event = threading.Event()
-_last_move_dir = "left"
+_macro_thread = None
 
 
 def _parse_key(key_str):
@@ -36,73 +42,98 @@ def _parse_key(key_str):
 
 
 ATTACK_KEY = _parse_key(config.ATTACK_KEY)
-TOGGLE_KEY  = _parse_key(config.TOGGLE_KEY)
-QUIT_KEY    = _parse_key(config.QUIT_KEY)
+TOGGLE_KEY = _parse_key(config.TOGGLE_KEY)
+QUIT_KEY   = _parse_key(config.QUIT_KEY)
+
+_last_move_dir = "left"
 
 
-def press_key(key, hold=None):
-    duration = hold if hold is not None else config.KEY_HOLD_DURATION
-    kb.press(key)
-    time.sleep(duration)
-    kb.release(key)
+def sleep_interruptible(seconds):
+    """stop_event나 running=False 시 즉시 깨어남"""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if not running or stop_event.is_set():
+            return False
+        time.sleep(0.05)
+    return True
 
 
-def do_side_move():
+def release_attack():
+    """공격키가 눌려 있을 경우 안전하게 뗌"""
+    try:
+        kb.release(ATTACK_KEY)
+    except Exception:
+        pass
+
+
+def do_move():
+    """좌우 이동: 한 방향으로 갔다가 반대로 복귀"""
     global _last_move_dir
-    if _last_move_dir == "left":
-        press_key(Key.left, config.MOVE_DURATION)
-        time.sleep(config.MOVE_RETURN_DELAY)
-        press_key(Key.right, config.MOVE_DURATION)
-        _last_move_dir = "right"
-    else:
-        press_key(Key.right, config.MOVE_DURATION)
-        time.sleep(config.MOVE_RETURN_DELAY)
-        press_key(Key.left, config.MOVE_DURATION)
-        _last_move_dir = "left"
 
+    move_key   = Key.left if _last_move_dir == "left" else Key.right
+    return_key = Key.right if _last_move_dir == "left" else Key.left
+    _last_move_dir = "right" if _last_move_dir == "left" else "left"
 
-def _next_move_interval():
-    return max(5.0, config.MOVE_EVERY_SEC + random.uniform(-3, 3))
+    move_dur   = random.uniform(*config.MOVE_DURATION_RANGE)
+    return_dur = random.uniform(*config.RETURN_DURATION_RANGE)
+
+    kb.press(move_key)
+    time.sleep(move_dur)
+    kb.release(move_key)
+
+    time.sleep(random.uniform(0.05, 0.15))  # 방향 전환 전 짧은 틈
+
+    kb.press(return_key)
+    time.sleep(return_dur)
+    kb.release(return_key)
 
 
 def macro_loop():
     global running
-    next_move_at = time.time() + _next_move_interval()
-    print("[매크로] 시작됨 — 공격키:", config.ATTACK_KEY.upper(),
-          "| 토글:", config.TOGGLE_KEY.upper(),
-          "| 종료:", config.QUIT_KEY.upper())
+
+    print(f"[매크로] 시작 — 공격키: {config.ATTACK_KEY.upper()}"
+          f" | 홀드: {config.HOLD_MIN}~{config.HOLD_MAX}초"
+          f" | 토글: {config.TOGGLE_KEY.upper()}"
+          f" | 종료: {config.QUIT_KEY.upper()}")
 
     while running and not stop_event.is_set():
-        now = time.time()
-        if config.MOVE_ENABLED and now >= next_move_at:
-            do_side_move()
-            next_move_at = now + _next_move_interval()
-            time.sleep(0.1)
 
-        if running:
-            press_key(ATTACK_KEY)
+        # ── Phase 1: 공격키 홀드 ──────────────────────────
+        hold_time = random.uniform(config.HOLD_MIN, config.HOLD_MAX)
+        print(f"  [홀드] {hold_time:.1f}초 동안 {config.ATTACK_KEY.upper()} 홀드")
+        kb.press(ATTACK_KEY)
 
-        deadline = time.time() + random.uniform(config.MIN_INTERVAL, config.MAX_INTERVAL)
-        while time.time() < deadline:
-            if not running or stop_event.is_set():
-                break
-            time.sleep(0.05)
+        ok = sleep_interruptible(hold_time)
+        kb.release(ATTACK_KEY)
 
+        if not ok:
+            break
+
+        # ── Phase 2: 좌우 이동 ────────────────────────────
+        print(f"  [이동] {'좌→우' if _last_move_dir == 'left' else '우→좌'} 이동")
+        do_move()
+
+        # 이동 후 아주 짧은 딜레이 (0~1초 랜덤)
+        pause = random.uniform(*config.PAUSE_AFTER_MOVE)
+        if not sleep_interruptible(pause):
+            break
+
+    release_attack()
     print("[매크로] 정지됨")
-
-
-_macro_thread = None
 
 
 def toggle_macro():
     global running, _macro_thread
+
     if running:
         running = False
+        release_attack()
         print("[매크로] 비활성화 중...")
     else:
         if _macro_thread and _macro_thread.is_alive():
             return
         running = True
+        stop_event.clear()
         _macro_thread = threading.Thread(target=macro_loop, daemon=True)
         _macro_thread.start()
 
@@ -114,6 +145,7 @@ def on_press(key):
         elif key == QUIT_KEY:
             global running
             running = False
+            release_attack()
             stop_event.set()
             print("[매크로] 종료")
             return False
@@ -122,14 +154,14 @@ def on_press(key):
 
 
 def main():
-    print("=" * 50)
+    print("=" * 52)
     print("  메이플랜드 매크로 (맥 전용)")
-    print(f"  공격키  : {config.ATTACK_KEY.upper()}")
-    print(f"  간격    : {config.MIN_INTERVAL}~{config.MAX_INTERVAL}초 (랜덤)")
-    print(f"  좌우이동: {'ON' if config.MOVE_ENABLED else 'OFF'} (매 ~{config.MOVE_EVERY_SEC}초)")
+    print(f"  공격키  : {config.ATTACK_KEY.upper()} (keydown 홀드)")
+    print(f"  홀드시간 : {config.HOLD_MIN}~{config.HOLD_MAX}초 (랜덤)")
+    print(f"  이동시간 : {config.MOVE_DURATION_RANGE[0]}~{config.MOVE_DURATION_RANGE[1]}초 (랜덤)")
     print(f"  토글    : {config.TOGGLE_KEY.upper()}")
     print(f"  종료    : {config.QUIT_KEY.upper()}")
-    print("=" * 50)
+    print("=" * 52)
     print("게임 창을 앞으로 가져온 뒤 F8을 누르세요.\n")
 
     try:
@@ -137,8 +169,7 @@ def main():
             listener.join()
     except Exception as e:
         print(f"\n[오류] {e}")
-        print("시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용에서")
-        print("터미널 및 python3 에 접근성 권한을 부여하세요.")
+        print("Windows: python -m pip install pynput 으로 재설치해보세요.")
         sys.exit(1)
 
 
