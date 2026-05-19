@@ -89,13 +89,17 @@ class MacroEngine:
             if not self.running or self._stop.is_set():
                 break
 
-            # ── 2. 살짝 이동 후 정확히 제자리 복귀 ────
-            go  = Key.left  if self._last_dir == "left" else Key.right
+            # ── 2. 후딜레이 대기 후 이동 ───────────────
+            # 스킬 후딜레이가 남아있으면 이동속도가 달라져
+            # 왕복 거리가 달라짐 → 후딜레이 끝난 뒤 이동해야
+            # 양방향 속도가 동일 → 수학적으로 정확히 제자리
+            time.sleep(cfg["after_skill_delay"])
+
+            go   = Key.left  if self._last_dir == "left" else Key.right
             back = Key.right if self._last_dir == "left" else Key.left
             arrow = "←" if self._last_dir == "left" else "→"
             self._last_dir = "right" if self._last_dir == "left" else "left"
 
-            # 이동 시간 = 복귀 시간 (동일하게) → 제자리 보장
             dur = random.uniform(cfg["move_min"], cfg["move_max"])
 
             self.log(f"[이동] {arrow} {dur:.2f}초 이동 후 복귀")
@@ -218,6 +222,13 @@ class App(tk.Tk):
             "0이면 바로 재시작  /  1이면 최대 1초 쉬고 재시작",
             "0.5", 10)
 
+        self._sep_light(frm, row=11)
+
+        self.v_after_skill = field(
+            "스킬 후딜레이 대기 (초)",
+            "스킬 키 뗀 후 이동 전 대기 → 후딜 끝나야 양방향 속도 동일 → 제자리 보장",
+            "0.3", 12)
+
         self._sep()
 
         # ── 버튼 ─────────────────────────────────────
@@ -290,8 +301,9 @@ class App(tk.Tk):
                 "hold_max":   float(self.v_hold_max.get()),
                 "move_min":   float(self.v_move_min.get()),
                 "move_max":   float(self.v_move_max.get()),
-                "pause_min":  float(self.v_pause_min.get()),
-                "pause_max":  float(self.v_pause_max.get()),
+                "pause_min":        float(self.v_pause_min.get()),
+                "pause_max":        float(self.v_pause_max.get()),
+                "after_skill_delay": float(self.v_after_skill.get()),
             }
         except ValueError:
             self._log("[오류] 숫자를 올바르게 입력하세요.")
