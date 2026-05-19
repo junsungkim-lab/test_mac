@@ -88,9 +88,9 @@ class MacroEngine:
             self._last_dir = "right" if self._last_dir == "left" else "left"
 
             move_dur   = random.uniform(cfg["move_min"], cfg["move_max"])
-            return_dur = random.uniform(cfg["move_min"], cfg["move_max"])
+            return_dur = move_dur  # 동일 시간으로 복귀 → 제자리 보장
 
-            self.log(f"[이동] {label} ({move_dur:.2f}초 → 복귀 {return_dur:.2f}초)")
+            self.log(f"[이동] {label} ({move_dur:.2f}초 왕복 → 제자리)")
             kb.press(move_key)
             time.sleep(move_dur)
             kb.release(move_key)
