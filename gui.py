@@ -130,7 +130,7 @@ BLU  = "#89b4fa"
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("메이플랜드 매크로")
+        self.title("스터디 타이머 알림")
         self.resizable(False, False)
         self.configure(bg=BG)
         self.engine = MacroEngine(self._log)
