@@ -137,11 +137,13 @@ class MacroEngine:
                     cfg["mm_x"], cfg["mm_y"],
                     cfg["mm_w"], cfg["mm_h"])
                 if char_x is not None:
+                    buf = cfg["bd_buffer"]
                     self.log(f"[경계] 미니맵 X={char_x} "
-                             f"(허용 {cfg['bd_left']}~{cfg['bd_right']})")
-                    if char_x <= cfg["bd_left"]:
+                             f"(안전구역 {cfg['bd_left']+buf}~{cfg['bd_right']-buf})")
+                    # 버퍼 포함해서 미리 보정 → 이동 중 튀어나가는 것 방지
+                    if char_x <= cfg["bd_left"] + buf:
                         forced_dir = "right"
-                    elif char_x >= cfg["bd_right"]:
+                    elif char_x >= cfg["bd_right"] - buf:
                         forced_dir = "left"
 
             # ── 4. 이동 ───────────────────────────────────
@@ -480,10 +482,12 @@ class App(tk.Tk):
 
         frm2 = tk.Frame(parent, bg=BG)
         frm2.pack(fill="x", padx=16, pady=4)
-        self.v_bd_left  = self._field(frm2, "왼쪽 한계 X",
-                                      "이 값 이하면 강제 오른쪽 이동", "20",  0)
-        self.v_bd_right = self._field(frm2, "오른쪽 한계 X",
-                                      "이 값 이상이면 강제 왼쪽 이동", "180", 1)
+        self.v_bd_left   = self._field(frm2, "왼쪽 한계 X",
+                                       "이 값 이하면 강제 오른쪽 이동", "20",  0)
+        self.v_bd_right  = self._field(frm2, "오른쪽 한계 X",
+                                       "이 값 이상이면 강제 왼쪽 이동", "180", 1)
+        self.v_bd_buffer = self._field(frm2, "안전 여유 (px)",
+                                       "한계보다 이 값만큼 미리 방향 전환 → 이탈 방지", "15", 2)
 
         self._hsep(parent)
 
@@ -670,6 +674,7 @@ class App(tk.Tk):
                 "mm_h":              int(self.v_mm_h.get()),
                 "bd_left":           int(self.v_bd_left.get()),
                 "bd_right":          int(self.v_bd_right.get()),
+                "bd_buffer":         int(self.v_bd_buffer.get()),
             }
         except ValueError:
             self._log("[오류] 숫자를 올바르게 입력하세요")
