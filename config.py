@@ -2,16 +2,21 @@
 #  메이플랜드 매크로 설정
 # ─────────────────────────────────────────────
 
-ATTACK_KEY = "z"          # 누를 공격 키
-MIN_INTERVAL = 0.15       # 최소 간격 (초)
-MAX_INTERVAL = 0.85       # 최대 간격 (초)
+# 누를 공격 키
+ATTACK_KEY = "z"
 
-MOVE_ENABLED = True       # 좌우 이동 사용 여부
-MOVE_EVERY_SEC = 12       # 몇 초마다 이동 (랜덤 ±3초)
-MOVE_DURATION = 0.25      # 이동 키 누르는 시간 (초)
-MOVE_RETURN_DELAY = 0.2   # 반대 방향 복귀 지연
+# 공격키를 꾹 홀드하는 시간 범위 (초)
+# 이 범위 안에서 랜덤하게 홀드 후 이동
+HOLD_MIN = 4.0
+HOLD_MAX = 9.0
 
-TOGGLE_KEY = "f8"         # 매크로 ON/OFF 토글
-QUIT_KEY = "f9"           # 완전 종료
+# 좌우 이동 시간 범위 (초)
+MOVE_DURATION_RANGE = (0.2, 0.7)   # 이동 방향으로 누르는 시간
+RETURN_DURATION_RANGE = (0.2, 0.6) # 반대 방향으로 복귀하는 시간
 
-KEY_HOLD_DURATION = 0.08  # 키 홀드 시간
+# 이동 후 다시 홀드 전 쉬는 시간 범위 (초) — 0~1초 사이
+PAUSE_AFTER_MOVE = (0.0, 1.0)
+
+# 토글 / 종료 키
+TOGGLE_KEY = "f8"
+QUIT_KEY   = "f9"
