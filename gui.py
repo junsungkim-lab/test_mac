@@ -15,6 +15,31 @@ from pynput.keyboard import Key, Controller
 kb = Controller()
 kb_lock = threading.Lock()   # 두 스레드가 동시에 키 입력하면 충돌 → 순서 보장
 
+# ── 미니맵 캐릭터 위치 감지 ──────────────────────────────
+def find_char_x(minimap_x, minimap_y, minimap_w, minimap_h):
+    """
+    미니맵 영역을 캡처해서 노란색 픽셀(내 캐릭터)의 X 좌표를 반환.
+    노란색 기준: R>180, G>180, B<100
+    반환값: 미니맵 내 상대 X (0~minimap_w), 못 찾으면 None
+    """
+    try:
+        import pyautogui
+        img = pyautogui.screenshot(
+            region=(minimap_x, minimap_y, minimap_w, minimap_h))
+        pixels = img.load()
+        w, h = img.size
+        found = []
+        for x in range(w):
+            for y in range(h):
+                r, g, b = pixels[x, y]
+                if r > 180 and g > 180 and b < 100:
+                    found.append(x)
+        if found:
+            return int(sum(found) / len(found))  # 평균 X = 캐릭터 중심
+        return None
+    except Exception:
+        return None
+
 def _parse_key(key_str):
     special = {
         "space": Key.space, "enter": Key.enter, "tab": Key.tab,
@@ -92,19 +117,38 @@ class MacroEngine:
                 break
 
             # ── 2. 후딜레이 대기 후 이동 ───────────────
-            # 스킬 후딜레이가 남아있으면 이동속도가 달라져
-            # 왕복 거리가 달라짐 → 후딜레이 끝난 뒤 이동해야
-            # 양방향 속도가 동일 → 수학적으로 정확히 제자리
             time.sleep(cfg["after_skill_delay"])
 
-            go   = Key.left  if self._last_dir == "left" else Key.right
-            back = Key.right if self._last_dir == "left" else Key.left
-            arrow = "←" if self._last_dir == "left" else "→"
-            self._last_dir = "right" if self._last_dir == "left" else "left"
+            # 미니맵으로 현재 위치 확인 → 경계 넘으면 방향 강제 보정
+            forced_dir = None
+            if cfg["boundary_on"]:
+                char_x = find_char_x(
+                    cfg["mm_x"], cfg["mm_y"],
+                    cfg["mm_w"], cfg["mm_h"])
+                if char_x is not None:
+                    self.log(f"[위치] 미니맵 X={char_x}  "
+                             f"(경계 {cfg['bd_left']}~{cfg['bd_right']})")
+                    if char_x <= cfg["bd_left"]:
+                        forced_dir = "right"   # 왼쪽 한계 → 강제 오른쪽
+                    elif char_x >= cfg["bd_right"]:
+                        forced_dir = "left"    # 오른쪽 한계 → 강제 왼쪽
+
+            # 강제 방향이 없으면 교대로 이동
+            if forced_dir:
+                move_dir = forced_dir
+                self._last_dir = "left" if forced_dir == "right" else "right"
+            else:
+                move_dir = self._last_dir
+                self._last_dir = "right" if self._last_dir == "left" else "left"
+
+            go   = Key.left  if move_dir == "left" else Key.right
+            back = Key.right if move_dir == "left" else Key.left
+            arrow = "←" if move_dir == "left" else "→"
 
             dur = random.uniform(cfg["move_min"], cfg["move_max"])
 
-            self.log(f"[이동] {arrow} {dur:.2f}초 이동 후 복귀")
+            self.log(f"[이동] {arrow} {dur:.2f}초 이동 후 복귀"
+                     + (" (경계 보정)" if forced_dir else ""))
             kb.press(go)
             time.sleep(dur)
             kb.release(go)
@@ -292,6 +336,64 @@ class App(tk.Tk):
 
         self._sep()
 
+        # ── 경계 설정 섹션 ────────────────────────────
+        bd_header = tk.Frame(self, bg=BG)
+        bd_header.pack(fill="x", padx=16, pady=(6, 0))
+        tk.Label(bd_header, text="  미니맵 경계 설정",
+                 font=("맑은 고딕", 10, "bold"), fg="#cba6f7", bg=BG,
+                 anchor="w").pack(side="left")
+        self.v_boundary_on = tk.BooleanVar(value=False)
+        tk.Checkbutton(bd_header, text="사용", variable=self.v_boundary_on,
+                       font=("맑은 고딕", 9), fg=FG, bg=BG,
+                       selectcolor=BOX, activebackground=BG,
+                       command=self._on_boundary_toggle).pack(side="left", padx=8)
+        tk.Label(self,
+                 text="  미니맵(좌상단)에서 캐릭터(노란점) 위치를 읽어 경계 이탈 방지",
+                 font=("맑은 고딕", 8), fg=GRAY, bg=BG,
+                 anchor="w").pack(fill="x", padx=16)
+
+        frm_bd = tk.Frame(self, bg=BG)
+        frm_bd.pack(fill="x", padx=16, pady=4)
+
+        def bd_field(title, desc, default, row):
+            tk.Label(frm_bd, text=title, font=("맑은 고딕", 9, "bold"),
+                     fg=FG, bg=BG, anchor="w").grid(
+                row=row*2, column=0, sticky="w", pady=(6,0))
+            tk.Label(frm_bd, text=desc, font=("맑은 고딕", 8),
+                     fg=GRAY, bg=BG, anchor="w").grid(
+                row=row*2+1, column=0, sticky="w")
+            var = tk.StringVar(value=default)
+            tk.Entry(frm_bd, textvariable=var, width=7,
+                     bg=BOX, fg=FG, insertbackground=FG,
+                     relief="flat", font=("Consolas", 10)).grid(
+                row=row*2, column=1, rowspan=2, padx=(12,0), sticky="w")
+            return var
+
+        # 미니맵 영역 (화면 픽셀 기준)
+        tk.Label(frm_bd, text="— 미니맵 영역 (화면 픽셀 좌표) —",
+                 font=("맑은 고딕", 8), fg="#cba6f7", bg=BG).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(4,0))
+        self.v_mm_x = bd_field("미니맵 X (시작)",  "미니맵 왼쪽 끝 X 픽셀", "0",   1)
+        self.v_mm_y = bd_field("미니맵 Y (시작)",  "미니맵 위쪽 끝 Y 픽셀", "0",   2)
+        self.v_mm_w = bd_field("미니맵 가로 크기", "미니맵 너비 (픽셀)",     "200", 3)
+        self.v_mm_h = bd_field("미니맵 세로 크기", "미니맵 높이 (픽셀)",     "100", 4)
+
+        tk.Label(frm_bd, text="— 이동 허용 범위 (미니맵 내 픽셀) —",
+                 font=("맑은 고딕", 8), fg="#cba6f7", bg=BG).grid(
+            row=10, column=0, columnspan=2, sticky="w", pady=(8,0))
+        self.v_bd_left  = bd_field("왼쪽 한계선",
+                                   "이 X 이하면 → 강제로 오른쪽 이동", "20",  6)
+        self.v_bd_right = bd_field("오른쪽 한계선",
+                                   "이 X 이상이면 → 강제로 왼쪽 이동", "180", 7)
+
+        # 테스트 버튼
+        tk.Button(self, text="📍 현재 위치 테스트",
+                  font=("맑은 고딕", 9), bg=BOX, fg=FG,
+                  relief="flat", padx=12, pady=4, cursor="hand2",
+                  command=self._test_position).pack(pady=(4, 0))
+
+        self._sep()
+
         # ── 평타 섹션 ─────────────────────────────────
         tk.Label(self, text="  매크로 감지 몬스터 처리 (평타)",
                  font=("맑은 고딕", 10, "bold"), fg=BLU, bg=BG,
@@ -419,6 +521,29 @@ class App(tk.Tk):
             self._log(f"[평타] {cfg['normal_key'].upper()} 키 "
                       f"{cfg['normal_interval']}초마다 {cfg['normal_count']}회")
 
+    def _on_boundary_toggle(self):
+        on = self.v_boundary_on.get()
+        self._log(f"[경계] {'활성화' if on else '비활성화'}")
+
+    def _test_position(self):
+        """현재 캐릭터 위치를 로그로 출력"""
+        try:
+            mm_x = int(self.v_mm_x.get())
+            mm_y = int(self.v_mm_y.get())
+            mm_w = int(self.v_mm_w.get())
+            mm_h = int(self.v_mm_h.get())
+        except ValueError:
+            self._log("[오류] 미니맵 좌표 숫자를 확인하세요.")
+            return
+        def _run():
+            x = find_char_x(mm_x, mm_y, mm_w, mm_h)
+            if x is None:
+                self._log("[테스트] 노란색 픽셀 못 찾음 — 미니맵 좌표 확인 필요")
+            else:
+                self._log(f"[테스트] 캐릭터 위치 X={x}  "
+                          f"(경계: {self.v_bd_left.get()}~{self.v_bd_right.get()})")
+        threading.Thread(target=_run, daemon=True).start()
+
     def _read_cfg(self):
         try:
             return {
@@ -433,6 +558,13 @@ class App(tk.Tk):
                 "normal_key":      self.v_normal_key.get().strip() or "ctrl",
                 "normal_interval": float(self.v_normal_interval.get()),
                 "normal_count":    int(self.v_normal_count.get()),
+                "boundary_on": self.v_boundary_on.get(),
+                "mm_x":   int(self.v_mm_x.get()),
+                "mm_y":   int(self.v_mm_y.get()),
+                "mm_w":   int(self.v_mm_w.get()),
+                "mm_h":   int(self.v_mm_h.get()),
+                "bd_left":  int(self.v_bd_left.get()),
+                "bd_right": int(self.v_bd_right.get()),
             }
         except ValueError:
             self._log("[오류] 숫자를 올바르게 입력하세요.")
