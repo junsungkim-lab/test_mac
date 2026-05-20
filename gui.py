@@ -229,7 +229,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("스터디 타이머 알림")
-        self.resizable(False, False)
+        self.resizable(True, True)
         self.configure(bg=BG)
         self.engine = MacroEngine(self._log)
         self.natk   = NormalAttackEngine(self._log)
@@ -237,10 +237,50 @@ class App(tk.Tk):
         self._start_hotkey_listener()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        # 화면 높이에 맞게 창 크기 자동 조정
+        self.update_idletasks()
+        screen_h = self.winfo_screenheight()
+        win_h    = self.winfo_reqheight()
+        if win_h > screen_h - 60:
+            self.geometry(f"460x{screen_h - 60}")
+        else:
+            self.geometry(f"460x{win_h}")
+
     # ── UI 전체 구성 ──────────────────────────────────────
     def _build_ui(self):
+        # 스크롤 가능한 캔버스 래퍼
+        outer = tk.Frame(self, bg=BG)
+        outer.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(outer, bg=BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer, orient="vertical",
+                                  command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        # 실제 콘텐츠가 들어가는 내부 프레임
+        inner = tk.Frame(canvas, bg=BG)
+        win_id = canvas.create_window((0, 0), window=inner,
+                                      anchor="nw")
+
+        def _on_resize(e):
+            canvas.itemconfig(win_id, width=e.width)
+        canvas.bind("<Configure>", _on_resize)
+
+        def _on_content_resize(e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        inner.bind("<Configure>", _on_content_resize)
+
+        # 마우스 휠 스크롤
+        def _on_wheel(e):
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_wheel)
+
+        # ── 이 아래부터 inner에 위젯 배치 ──────────────────
         # 상태 바
-        top = tk.Frame(self, bg=BG)
+        top = tk.Frame(inner, bg=BG)
         top.pack(fill="x", padx=16, pady=(14, 6))
         self._dot = tk.Label(top, text="●", font=("Arial", 20), fg=RED, bg=BG)
         self._dot.pack(side="left")
@@ -251,8 +291,7 @@ class App(tk.Tk):
         # 탭
         style = ttk.Style()
         style.theme_use("default")
-        style.configure("TNotebook",
-                        background=BG, borderwidth=0)
+        style.configure("TNotebook", background=BG, borderwidth=0)
         style.configure("TNotebook.Tab",
                         background=BOX, foreground=GRAY,
                         font=("맑은 고딕", 10, "bold"),
@@ -261,7 +300,7 @@ class App(tk.Tk):
                   background=[("selected", "#45475a")],
                   foreground=[("selected", FG)])
 
-        nb = ttk.Notebook(self)
+        nb = ttk.Notebook(inner)
         nb.pack(fill="both", expand=True, padx=10, pady=4)
 
         tab1 = tk.Frame(nb, bg=BG)
@@ -272,9 +311,12 @@ class App(tk.Tk):
         self._build_tab_macro(tab1)
         self._build_tab_boundary(tab2)
 
-        # 메인 버튼 + 로그 (탭 밖, 공통)
+        # inner를 부모로 사용하도록 _hsep에서 쓰는 self 대신 inner 참조
+        self._inner = inner
+
+        # 메인 버튼 + 로그 (탭 밖, inner에 배치)
         self._hsep()
-        btn_row = tk.Frame(self, bg=BG)
+        btn_row = tk.Frame(inner, bg=BG)
         btn_row.pack(pady=8)
         self._btn = tk.Button(
             btn_row, text="▶   시 작   (F8)",
@@ -289,7 +331,7 @@ class App(tk.Tk):
 
         self._hsep()
         self._log_box = scrolledtext.ScrolledText(
-            self, height=8, width=54,
+            inner, height=8, width=54,
             bg=BOX, fg=FG, font=("Consolas", 9),
             relief="flat", state="disabled")
         self._log_box.pack(padx=14, pady=(0, 12))
@@ -431,7 +473,7 @@ class App(tk.Tk):
             row=row*2, column=0, columnspan=2, sticky="ew", pady=4)
 
     def _hsep(self, parent=None):
-        target = parent if parent else self
+        target = parent if parent else self._inner
         tk.Frame(target, bg="#45475a", height=1).pack(fill="x", padx=10, pady=4)
 
     # ── 로그 ─────────────────────────────────────────────
