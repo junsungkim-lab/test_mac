@@ -404,13 +404,27 @@ class App(tk.Tk):
         self._hsep(parent)
 
         # 미니맵 좌표
-        tk.Label(parent, text="  ① 미니맵 영역 (화면 픽셀 좌표)",
+        tk.Label(parent, text="  ① 미니맵 영역 좌표 잡기",
                  font=("맑은 고딕", 10, "bold"), fg=FG, bg=BG, anchor="w"
                  ).pack(fill="x", padx=16, pady=(8, 0))
         tk.Label(parent,
-                 text="  미니맵 좌상단 모서리 위에 마우스 올리면 화면 좌하단에 좌표 표시됨",
-                 font=("맑은 고딕", 8), fg=GRAY, bg=BG, anchor="w"
+                 text="  버튼 누르고 → 미니맵 좌상단 모서리에 마우스 올리기 (3초)\n"
+                      "  → 다시 버튼 누르고 → 미니맵 우하단 모서리에 마우스 올리기 (3초)",
+                 font=("맑은 고딕", 8), fg=GRAY, bg=BG, anchor="w", justify="left"
                  ).pack(fill="x", padx=16)
+
+        coord_row = tk.Frame(parent, bg=BG)
+        coord_row.pack(pady=4)
+        tk.Button(coord_row, text="📌 좌상단 좌표 (3초)",
+                  font=("맑은 고딕", 9), bg=BOX, fg=FG,
+                  relief="flat", padx=8, pady=4, cursor="hand2",
+                  command=lambda: self._capture_coord("topleft")
+                  ).pack(side="left", padx=4)
+        tk.Button(coord_row, text="📌 우하단 좌표 (3초)",
+                  font=("맑은 고딕", 9), bg=BOX, fg=FG,
+                  relief="flat", padx=8, pady=4, cursor="hand2",
+                  command=lambda: self._capture_coord("bottomright")
+                  ).pack(side="left", padx=4)
 
         frm = tk.Frame(parent, bg=BG)
         frm.pack(fill="x", padx=16, pady=4)
@@ -418,6 +432,13 @@ class App(tk.Tk):
         self.v_mm_y = self._field(frm, "미니맵 Y",    "미니맵 위쪽 끝 Y",  "0",   1)
         self.v_mm_w = self._field(frm, "미니맵 가로", "미니맵 너비 (px)",   "200", 2)
         self.v_mm_h = self._field(frm, "미니맵 세로", "미니맵 높이 (px)",   "80",  3)
+
+        # 캡처 미리보기 버튼
+        tk.Button(parent, text="🖼  미니맵 캡처 확인 (minimap_preview.png 저장)",
+                  font=("맑은 고딕", 9), bg=BOX, fg=FG,
+                  relief="flat", padx=8, pady=4, cursor="hand2",
+                  command=self._preview_minimap
+                  ).pack(pady=(0, 4))
 
         self._hsep(parent)
 
@@ -485,6 +506,49 @@ class App(tk.Tk):
             self._log_box.see("end")
             self._log_box.config(state="disabled")
         self.after(0, _w)
+
+    # ── 미니맵 좌표 자동 캡처 ────────────────────────────
+    def _capture_coord(self, corner):
+        self._log(f"[좌표] 3초 후 마우스 위치를 {'좌상단' if corner=='topleft' else '우하단'}으로 저장")
+        def _run():
+            time.sleep(3)
+            import pyautogui
+            x, y = pyautogui.position()
+            if corner == "topleft":
+                self.v_mm_x.set(str(x))
+                self.v_mm_y.set(str(y))
+                self._log(f"[좌표] 좌상단 → X={x}, Y={y} 저장됨")
+            else:
+                try:
+                    x1 = int(self.v_mm_x.get())
+                    y1 = int(self.v_mm_y.get())
+                    self.v_mm_w.set(str(x - x1))
+                    self.v_mm_h.set(str(y - y1))
+                    self._log(f"[좌표] 우하단 → 가로={x-x1}, 세로={y-y1} 저장됨")
+                except ValueError:
+                    self._log("[오류] 좌상단 먼저 저장하세요")
+        threading.Thread(target=_run, daemon=True).start()
+
+    # ── 미니맵 캡처 미리보기 ─────────────────────────────
+    def _preview_minimap(self):
+        try:
+            mm_x = int(self.v_mm_x.get())
+            mm_y = int(self.v_mm_y.get())
+            mm_w = int(self.v_mm_w.get())
+            mm_h = int(self.v_mm_h.get())
+        except ValueError:
+            self._log("[오류] 좌표 숫자를 확인하세요")
+            return
+        def _run():
+            import pyautogui, os
+            img = pyautogui.screenshot(region=(mm_x, mm_y, mm_w, mm_h))
+            # 확인하기 쉽게 4배 확대
+            img = img.resize((mm_w * 4, mm_h * 4))
+            path = os.path.join(os.path.dirname(__file__), "minimap_preview.png")
+            img.save(path)
+            self._log(f"[미리보기] minimap_preview.png 저장됨 — 파일 열어서 확인하세요")
+            os.startfile(path)   # 윈도우에서 이미지 자동으로 열기
+        threading.Thread(target=_run, daemon=True).start()
 
     # ── 위치 테스트 ───────────────────────────────────────
     def _test_pos(self):
