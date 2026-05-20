@@ -30,12 +30,32 @@ def _parse_key(key_str):
     return special.get(key_str.strip().lower(), key_str.strip().lower())
 
 
+# ── 스크린샷 (DirectX 게임 호환) ─────────────────────────
+def _grab(x, y, w, h):
+    """mss → PIL.ImageGrab 순서로 시도. 둘 다 실패하면 None."""
+    try:
+        import mss, mss.tools
+        from PIL import Image
+        with mss.mss() as sct:
+            mon = {"left": x, "top": y, "width": w, "height": h}
+            raw = sct.grab(mon)
+            return Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+    except Exception:
+        pass
+    try:
+        from PIL import ImageGrab
+        return ImageGrab.grab(bbox=(x, y, x + w, y + h))
+    except Exception:
+        return None
+
+
 # ── 미니맵 노란점 감지 ────────────────────────────────────
 def find_char_x_minimap(mm_x, mm_y, mm_w, mm_h, tolerance=30):
     """미니맵에서 노란색 픽셀 X 좌표 반환. 못 찾으면 None."""
     try:
-        import pyautogui
-        img = pyautogui.screenshot(region=(mm_x, mm_y, mm_w, mm_h))
+        img = _grab(mm_x, mm_y, mm_w, mm_h)
+        if img is None:
+            return None
         pixels = img.load()
         w, h = img.size
         found = []
@@ -527,14 +547,24 @@ class App(tk.Tk):
         if not self._tracking:
             return
         try:
-            import pyautogui
-            x, y = pyautogui.position()
-            self._mouse_lbl.config(text=f"X={x}   Y={y}")
-        except Exception as e:
-            self._mouse_lbl.config(text=f"오류: {e}")
-            self._tracking = False
-            self._track_btn.config(text="▶ 추적 시작", bg=BLU)
-            return
+            import mss
+            with mss.mss() as sct:
+                x, y = sct.monitors[0]["left"], sct.monitors[0]["top"]
+            # mss로 마우스 위치 못 가져오므로 ctypes 사용 (Windows)
+            import ctypes
+            pt = ctypes.wintypes.POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+            self._mouse_lbl.config(text=f"X={pt.x}   Y={pt.y}")
+        except Exception:
+            try:
+                import pyautogui
+                x, y = pyautogui.position()
+                self._mouse_lbl.config(text=f"X={x}   Y={y}")
+            except Exception as e:
+                self._mouse_lbl.config(text=f"오류: {e}")
+                self._tracking = False
+                self._track_btn.config(text="▶ 추적 시작", bg=BLU)
+                return
         self.after(100, self._update_mouse_pos)
 
     # ── 미니맵 캡처 미리보기 ─────────────────────────────
@@ -552,16 +582,17 @@ class App(tk.Tk):
             return
         def _run():
             try:
-                import pyautogui, os
-                img = pyautogui.screenshot(region=(mm_x, mm_y, mm_w, mm_h))
+                import os
+                img = _grab(mm_x, mm_y, mm_w, mm_h)
+                if img is None:
+                    self._log("[오류] 캡처 실패 — pip install mss pillow 확인")
+                    return
                 img = img.resize((mm_w * 4, mm_h * 4))
                 path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "minimap_preview.png")
                 img.save(path)
-                self._log(f"[미리보기] 저장: {path}")
+                self._log(f"[미리보기] 저장됨 → {path}")
                 os.startfile(path)
-            except ImportError:
-                self._log("[오류] pyautogui 미설치 → pip install pyautogui pillow")
             except Exception as e:
                 self._log(f"[오류] {e}")
         threading.Thread(target=_run, daemon=True).start()
