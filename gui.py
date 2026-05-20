@@ -408,23 +408,30 @@ class App(tk.Tk):
                  font=("맑은 고딕", 10, "bold"), fg=FG, bg=BG, anchor="w"
                  ).pack(fill="x", padx=16, pady=(8, 0))
         tk.Label(parent,
-                 text="  버튼 누르고 → 미니맵 좌상단 모서리에 마우스 올리기 (3초)\n"
-                      "  → 다시 버튼 누르고 → 미니맵 우하단 모서리에 마우스 올리기 (3초)",
+                 text="  아래 실시간 좌표를 보면서 미니맵 모서리에 마우스 올리고\n"
+                      "  숫자 읽어서 직접 입력하세요",
                  font=("맑은 고딕", 8), fg=GRAY, bg=BG, anchor="w", justify="left"
                  ).pack(fill="x", padx=16)
 
-        coord_row = tk.Frame(parent, bg=BG)
-        coord_row.pack(pady=4)
-        tk.Button(coord_row, text="📌 좌상단 좌표 (3초)",
-                  font=("맑은 고딕", 9), bg=BOX, fg=FG,
-                  relief="flat", padx=8, pady=4, cursor="hand2",
-                  command=lambda: self._capture_coord("topleft")
-                  ).pack(side="left", padx=4)
-        tk.Button(coord_row, text="📌 우하단 좌표 (3초)",
-                  font=("맑은 고딕", 9), bg=BOX, fg=FG,
-                  relief="flat", padx=8, pady=4, cursor="hand2",
-                  command=lambda: self._capture_coord("bottomright")
-                  ).pack(side="left", padx=4)
+        # 실시간 마우스 좌표 표시
+        mouse_frm = tk.Frame(parent, bg=BOX)
+        mouse_frm.pack(fill="x", padx=16, pady=6)
+        tk.Label(mouse_frm, text=" 현재 마우스 좌표 →",
+                 font=("맑은 고딕", 9), fg=GRAY, bg=BOX).pack(side="left", padx=6)
+        self._mouse_lbl = tk.Label(mouse_frm, text="X=0   Y=0",
+                                   font=("Consolas", 11, "bold"), fg=GRN, bg=BOX)
+        self._mouse_lbl.pack(side="left", padx=4, pady=6)
+        self._tracking = False
+        self._track_btn = tk.Button(mouse_frm, text="▶ 추적 시작",
+                                    font=("맑은 고딕", 9), bg=BLU, fg="#1e1e2e",
+                                    relief="flat", padx=8, pady=2, cursor="hand2",
+                                    command=self._toggle_tracking)
+        self._track_btn.pack(side="right", padx=6)
+
+        tk.Label(parent,
+                 text="  좌상단 X·Y 읽기 → 입력  /  우하단 X·Y 읽기 → (우X-좌X)=가로, (우Y-좌Y)=세로",
+                 font=("맑은 고딕", 8), fg=GRAY, bg=BG, anchor="w"
+                 ).pack(fill="x", padx=16)
 
         frm = tk.Frame(parent, bg=BG)
         frm.pack(fill="x", padx=16, pady=4)
@@ -434,7 +441,7 @@ class App(tk.Tk):
         self.v_mm_h = self._field(frm, "미니맵 세로", "미니맵 높이 (px)",   "80",  3)
 
         # 캡처 미리보기 버튼
-        tk.Button(parent, text="🖼  미니맵 캡처 확인 (minimap_preview.png 저장)",
+        tk.Button(parent, text="🖼  미니맵 캡처 확인 (이미지로 저장해서 확인)",
                   font=("맑은 고딕", 9), bg=BOX, fg=FG,
                   relief="flat", padx=8, pady=4, cursor="hand2",
                   command=self._preview_minimap
@@ -507,27 +514,28 @@ class App(tk.Tk):
             self._log_box.config(state="disabled")
         self.after(0, _w)
 
-    # ── 미니맵 좌표 자동 캡처 ────────────────────────────
-    def _capture_coord(self, corner):
-        self._log(f"[좌표] 3초 후 마우스 위치를 {'좌상단' if corner=='topleft' else '우하단'}으로 저장")
-        def _run():
-            time.sleep(3)
+    # ── 실시간 마우스 좌표 추적 ──────────────────────────
+    def _toggle_tracking(self):
+        self._tracking = not self._tracking
+        if self._tracking:
+            self._track_btn.config(text="■ 추적 중지", bg=RED)
+            self._update_mouse_pos()
+        else:
+            self._track_btn.config(text="▶ 추적 시작", bg=BLU)
+
+    def _update_mouse_pos(self):
+        if not self._tracking:
+            return
+        try:
             import pyautogui
             x, y = pyautogui.position()
-            if corner == "topleft":
-                self.v_mm_x.set(str(x))
-                self.v_mm_y.set(str(y))
-                self._log(f"[좌표] 좌상단 → X={x}, Y={y} 저장됨")
-            else:
-                try:
-                    x1 = int(self.v_mm_x.get())
-                    y1 = int(self.v_mm_y.get())
-                    self.v_mm_w.set(str(x - x1))
-                    self.v_mm_h.set(str(y - y1))
-                    self._log(f"[좌표] 우하단 → 가로={x-x1}, 세로={y-y1} 저장됨")
-                except ValueError:
-                    self._log("[오류] 좌상단 먼저 저장하세요")
-        threading.Thread(target=_run, daemon=True).start()
+            self._mouse_lbl.config(text=f"X={x}   Y={y}")
+        except Exception as e:
+            self._mouse_lbl.config(text=f"오류: {e}")
+            self._tracking = False
+            self._track_btn.config(text="▶ 추적 시작", bg=BLU)
+            return
+        self.after(100, self._update_mouse_pos)
 
     # ── 미니맵 캡처 미리보기 ─────────────────────────────
     def _preview_minimap(self):
@@ -539,15 +547,23 @@ class App(tk.Tk):
         except ValueError:
             self._log("[오류] 좌표 숫자를 확인하세요")
             return
+        if mm_w <= 0 or mm_h <= 0:
+            self._log("[오류] 가로/세로가 0 이하입니다. 좌표를 다시 확인하세요")
+            return
         def _run():
-            import pyautogui, os
-            img = pyautogui.screenshot(region=(mm_x, mm_y, mm_w, mm_h))
-            # 확인하기 쉽게 4배 확대
-            img = img.resize((mm_w * 4, mm_h * 4))
-            path = os.path.join(os.path.dirname(__file__), "minimap_preview.png")
-            img.save(path)
-            self._log(f"[미리보기] minimap_preview.png 저장됨 — 파일 열어서 확인하세요")
-            os.startfile(path)   # 윈도우에서 이미지 자동으로 열기
+            try:
+                import pyautogui, os
+                img = pyautogui.screenshot(region=(mm_x, mm_y, mm_w, mm_h))
+                img = img.resize((mm_w * 4, mm_h * 4))
+                path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "minimap_preview.png")
+                img.save(path)
+                self._log(f"[미리보기] 저장: {path}")
+                os.startfile(path)
+            except ImportError:
+                self._log("[오류] pyautogui 미설치 → pip install pyautogui pillow")
+            except Exception as e:
+                self._log(f"[오류] {e}")
         threading.Thread(target=_run, daemon=True).start()
 
     # ── 위치 테스트 ───────────────────────────────────────
