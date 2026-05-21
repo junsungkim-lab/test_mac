@@ -236,6 +236,133 @@ class NormalAttackEngine:
         self.log("[평타] 종료")
 
 
+# ── 화면 감시 엔진 ───────────────────────────────────────────
+class ScreenWatcher:
+    """검정화면(마을 이동) 감지 + 거짓말탐지기 자동 클릭"""
+
+    def __init__(self, log_fn, stop_macro_fn):
+        self.log = log_fn
+        self.stop_macro = stop_macro_fn
+        self.running = False
+        self._stop = threading.Event()
+        self._thread = None
+        self._lie_cooldown = 0
+
+    def start(self, cfg):
+        if self.running:
+            return
+        self._cfg = cfg
+        self.running = True
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self.running = False
+        self._stop.set()
+
+    # ── 내부 루프 ─────────────────────────────────────────
+    def _loop(self):
+        while self.running and not self._stop.is_set():
+            try:
+                cfg = self._cfg
+                if cfg.get("black_on"):
+                    self._check_black(cfg)
+                if cfg.get("lie_on") and time.time() > self._lie_cooldown:
+                    self._check_lie(cfg)
+            except Exception as e:
+                self.log(f"[감시오류] {e}")
+            time.sleep(0.4)
+
+    # ── 공통 유틸 ─────────────────────────────────────────
+    @staticmethod
+    def _brightness(img):
+        pix = list(img.convert("L").getdata())
+        return sum(pix) / len(pix)
+
+    @staticmethod
+    def _img_vec(img, size=(32, 32)):
+        return list(img.resize(size).convert("L").getdata())
+
+    @staticmethod
+    def _diff(a, b):
+        return sum(abs(x - y) for x, y in zip(a, b))
+
+    @staticmethod
+    def _click(x, y):
+        try:
+            import ctypes
+            ctypes.windll.user32.SetCursorPos(x, y)
+            time.sleep(0.05)
+            ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+            time.sleep(0.05)
+            ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+            return
+        except Exception:
+            pass
+        try:
+            from pynput.mouse import Button, Controller as MC
+            mc = MC()
+            mc.position = (x, y)
+            time.sleep(0.05)
+            mc.click(Button.left)
+        except Exception:
+            pass
+
+    # ── 검정화면 감지 ─────────────────────────────────────
+    def _check_black(self, cfg):
+        img = _grab(cfg["watch_x"], cfg["watch_y"],
+                    cfg["watch_w"], cfg["watch_h"])
+        if img is None:
+            return
+        b = self._brightness(img)
+        if b < cfg["black_thresh"]:
+            self.log(f"[감시] 검정화면 감지 (밝기={b:.0f}) → 매크로 전체 정지")
+            self.stop_macro()
+            time.sleep(3)  # 화면 전환이 끝날 때까지 재감지 방지
+
+    # ── 거짓말탐지기 감지 ─────────────────────────────────
+    def _check_lie(self, cfg):
+        # 팝업 영역 밝기가 임계값보다 높아야 팝업이 열린 것으로 판단
+        pop = _grab(cfg["lie_pop_x"], cfg["lie_pop_y"],
+                    cfg["lie_pop_w"], cfg["lie_pop_h"])
+        if pop is None:
+            return
+        if self._brightness(pop) < cfg.get("lie_pop_thresh", 150):
+            return
+
+        self.log("[감시] 거짓말탐지기 감지! 정답 찾는 중...")
+
+        sample = _grab(cfg["lie_sample_x"], cfg["lie_sample_y"],
+                       cfg["lie_sample_w"], cfg["lie_sample_h"])
+        if sample is None:
+            return
+
+        n = cfg["lie_btn_count"]
+        bx = cfg["lie_btn_x"]
+        by = cfg["lie_btn_y"]
+        bw = cfg["lie_btn_w"]
+        bh = cfg["lie_btn_h"]
+        each_w = bw // n
+        ref = self._img_vec(sample)
+
+        best_score, best_idx = float("inf"), 0
+        for i in range(n):
+            btn = _grab(bx + i * each_w, by, each_w, bh)
+            if btn is None:
+                continue
+            score = self._diff(ref, self._img_vec(btn))
+            self.log(f"  버튼{i+1} 유사도차이={score:.0f}")
+            if score < best_score:
+                best_score, best_idx = score, i
+
+        cx = bx + best_idx * each_w + each_w // 2
+        cy = by + bh // 2
+        self.log(f"[감시] 버튼 {best_idx+1} 클릭 (X={cx} Y={cy})")
+        self._click(cx, cy)
+        self._lie_cooldown = time.time() + 15  # 15초 쿨다운
+
+
 # ── GUI ───────────────────────────────────────────────────
 BG   = "#1e1e2e"
 BOX  = "#313244"
@@ -253,8 +380,9 @@ class App(tk.Tk):
         self.title("스터디 타이머 알림")
         self.resizable(True, True)
         self.configure(bg=BG)
-        self.engine = MacroEngine(self._log)
-        self.natk   = NormalAttackEngine(self._log)
+        self.engine  = MacroEngine(self._log)
+        self.natk    = NormalAttackEngine(self._log)
+        self.watcher = ScreenWatcher(self._log, self._stop_all)
         self._build_ui()
         self._start_hotkey_listener()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -327,11 +455,14 @@ class App(tk.Tk):
 
         tab1 = tk.Frame(nb, bg=BG)
         tab2 = tk.Frame(nb, bg=BG)
+        tab3 = tk.Frame(nb, bg=BG)
         nb.add(tab1, text="  스킬 매크로  ")
         nb.add(tab2, text="  경계 설정  ")
+        nb.add(tab3, text="  화면 감시  ")
 
         self._build_tab_macro(tab1)
         self._build_tab_boundary(tab2)
+        self._build_tab_watcher(tab3)
 
         # inner를 부모로 사용하도록 _hsep에서 쓰는 self 대신 inner 참조
         self._inner = inner
@@ -504,6 +635,165 @@ class App(tk.Tk):
                   font=("맑은 고딕", 10), bg=BOX, fg=FG,
                   relief="flat", padx=14, pady=6, cursor="hand2",
                   command=self._test_pos).pack(pady=10)
+
+    # ── 탭 3: 화면 감시 ──────────────────────────────────
+    def _build_tab_watcher(self, parent):
+        # ① 검정화면 감지
+        tk.Label(parent, text="  ① 검정화면 감지 (마을 이동 시 자동 정지)",
+                 font=("맑은 고딕", 10, "bold"), fg=FG, bg=BG, anchor="w"
+                 ).pack(fill="x", padx=16, pady=(10, 0))
+        tk.Label(parent,
+                 text="  마을 이동 시 검정화면 → 밝기가 임계값 미만이면 매크로 정지",
+                 font=("맑은 고딕", 8), fg=GRAY, bg=BG, anchor="w"
+                 ).pack(fill="x", padx=16)
+
+        self.v_black_on = tk.BooleanVar(value=True)
+        tk.Checkbutton(parent, text=" 검정화면 감지 사용",
+                       variable=self.v_black_on,
+                       bg=BG, fg=FG, selectcolor=BOX,
+                       activebackground=BG, activeforeground=FG,
+                       font=("맑은 고딕", 10)
+                       ).pack(anchor="w", padx=16, pady=(4, 0))
+
+        frm_b = tk.Frame(parent, bg=BG)
+        frm_b.pack(fill="x", padx=16, pady=4)
+        self.v_watch_x = self._field(frm_b, "감시 영역 X",  "게임 화면 왼쪽 X", "0",   0)
+        self.v_watch_y = self._field(frm_b, "감시 영역 Y",  "게임 화면 위쪽 Y", "0",   1)
+        self.v_watch_w = self._field(frm_b, "감시 영역 W",  "가로 픽셀 수",     "800", 2)
+        self.v_watch_h = self._field(frm_b, "감시 영역 H",  "세로 픽셀 수",     "600", 3)
+        self.v_black_thresh = self._field(frm_b, "밝기 임계값",
+                                          "0~255, 이 값 미만이면 검정화면", "20", 4)
+
+        tk.Button(parent, text="📷  현재 밝기 확인",
+                  font=("맑은 고딕", 10), bg=BOX, fg=FG,
+                  relief="flat", padx=14, pady=6, cursor="hand2",
+                  command=self._test_brightness).pack(pady=(6, 2))
+
+        self._hsep(parent)
+
+        # ② 거짓말탐지기
+        tk.Label(parent, text="  ② 거짓말탐지기 자동 클릭",
+                 font=("맑은 고딕", 10, "bold"), fg=FG, bg=BG, anchor="w"
+                 ).pack(fill="x", padx=16, pady=(8, 0))
+        tk.Label(parent,
+                 text="  팝업 감지 → 샘플 문자와 가장 유사한 버튼 자동 클릭 (15초 쿨다운)",
+                 font=("맑은 고딕", 8), fg=GRAY, bg=BG, anchor="w"
+                 ).pack(fill="x", padx=16)
+
+        self.v_lie_on = tk.BooleanVar(value=False)
+        tk.Checkbutton(parent, text=" 거짓말탐지기 감지 사용",
+                       variable=self.v_lie_on,
+                       bg=BG, fg=FG, selectcolor=BOX,
+                       activebackground=BG, activeforeground=FG,
+                       font=("맑은 고딕", 10)
+                       ).pack(anchor="w", padx=16, pady=(4, 0))
+
+        frm_l = tk.Frame(parent, bg=BG)
+        frm_l.pack(fill="x", padx=16, pady=4)
+
+        # 팝업 감지 영역
+        tk.Label(frm_l, text="─ 팝업 감지 영역 (팝업 전체)",
+                 font=("맑은 고딕", 9, "bold"), fg=BLU, bg=BG, anchor="w"
+                 ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.v_lie_pop_x = self._field(frm_l, "팝업 X", "팝업 왼쪽 X",  "400", 1)
+        self.v_lie_pop_y = self._field(frm_l, "팝업 Y", "팝업 위쪽 Y",  "250", 2)
+        self.v_lie_pop_w = self._field(frm_l, "팝업 W", "팝업 가로 크기", "300", 3)
+        self.v_lie_pop_h = self._field(frm_l, "팝업 H", "팝업 세로 크기", "200", 4)
+        self.v_lie_pop_thresh = self._field(frm_l, "밝기 임계값",
+                                            "이 값 초과여야 팝업 열린 것으로 판단", "150", 5)
+
+        # 샘플 문자 영역
+        tk.Label(frm_l, text="─ 샘플 문자 영역 (탐지기에 표시된 '정답 문자')",
+                 font=("맑은 고딕", 9, "bold"), fg=PUR, bg=BG, anchor="w"
+                 ).grid(row=12, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        self.v_lie_sample_x = self._field(frm_l, "샘플 X", "정답 문자 왼쪽 X",  "440", 7)
+        self.v_lie_sample_y = self._field(frm_l, "샘플 Y", "정답 문자 위쪽 Y",  "280", 8)
+        self.v_lie_sample_w = self._field(frm_l, "샘플 W", "정답 문자 가로 크기", "50",  9)
+        self.v_lie_sample_h = self._field(frm_l, "샘플 H", "정답 문자 세로 크기", "50",  10)
+
+        # 버튼 영역
+        tk.Label(frm_l, text="─ 선택 버튼 전체 영역 (클릭 가능한 보기들)",
+                 font=("맑은 고딕", 9, "bold"), fg=GRN, bg=BG, anchor="w"
+                 ).grid(row=22, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        self.v_lie_btn_x = self._field(frm_l, "버튼 X", "버튼 영역 왼쪽 X",  "410", 12)
+        self.v_lie_btn_y = self._field(frm_l, "버튼 Y", "버튼 영역 위쪽 Y",  "360", 13)
+        self.v_lie_btn_w = self._field(frm_l, "버튼 W", "버튼 영역 전체 가로", "250", 14)
+        self.v_lie_btn_h = self._field(frm_l, "버튼 H", "버튼 영역 세로",     "50",  15)
+        self.v_lie_btn_count = self._field(frm_l, "버튼 개수", "선택지 총 개수", "5",  16)
+
+        self._hsep(parent)
+
+        # 감시 시작/중지 버튼
+        self._watch_btn = tk.Button(
+            parent, text="👁  감시 시작",
+            font=("맑은 고딕", 11, "bold"), bg=BLU, fg="#1e1e2e",
+            relief="flat", padx=20, pady=8, cursor="hand2",
+            command=self._toggle_watcher)
+        self._watch_btn.pack(pady=8)
+
+    # ── 화면 감시 토글 ────────────────────────────────────
+    def _toggle_watcher(self):
+        if self.watcher.running:
+            self.watcher.stop()
+            self._watch_btn.config(text="👁  감시 시작", bg=BLU)
+            self._log("[감시] 화면 감시 중지")
+        else:
+            cfg = self._read_watcher_cfg()
+            if cfg is None:
+                return
+            self.watcher.start(cfg)
+            self._watch_btn.config(text="■  감시 중지", bg=RED)
+            modes = []
+            if cfg["black_on"]:
+                modes.append("검정화면")
+            if cfg["lie_on"]:
+                modes.append("거짓말탐지기")
+            self._log(f"[감시] 시작 ({', '.join(modes) or '비활성'})")
+
+    def _read_watcher_cfg(self):
+        try:
+            return {
+                "black_on":       self.v_black_on.get(),
+                "watch_x":        int(self.v_watch_x.get()),
+                "watch_y":        int(self.v_watch_y.get()),
+                "watch_w":        int(self.v_watch_w.get()),
+                "watch_h":        int(self.v_watch_h.get()),
+                "black_thresh":   int(self.v_black_thresh.get()),
+                "lie_on":         self.v_lie_on.get(),
+                "lie_pop_x":      int(self.v_lie_pop_x.get()),
+                "lie_pop_y":      int(self.v_lie_pop_y.get()),
+                "lie_pop_w":      int(self.v_lie_pop_w.get()),
+                "lie_pop_h":      int(self.v_lie_pop_h.get()),
+                "lie_pop_thresh": int(self.v_lie_pop_thresh.get()),
+                "lie_sample_x":   int(self.v_lie_sample_x.get()),
+                "lie_sample_y":   int(self.v_lie_sample_y.get()),
+                "lie_sample_w":   int(self.v_lie_sample_w.get()),
+                "lie_sample_h":   int(self.v_lie_sample_h.get()),
+                "lie_btn_x":      int(self.v_lie_btn_x.get()),
+                "lie_btn_y":      int(self.v_lie_btn_y.get()),
+                "lie_btn_w":      int(self.v_lie_btn_w.get()),
+                "lie_btn_h":      int(self.v_lie_btn_h.get()),
+                "lie_btn_count":  int(self.v_lie_btn_count.get()),
+            }
+        except ValueError:
+            self._log("[오류] 화면 감시 탭 숫자를 올바르게 입력하세요")
+            return None
+
+    def _test_brightness(self):
+        def _run():
+            try:
+                x, y = int(self.v_watch_x.get()), int(self.v_watch_y.get())
+                w, h = int(self.v_watch_w.get()), int(self.v_watch_h.get())
+                img = _grab(x, y, w, h)
+                if img is None:
+                    self._log("[감시] 캡처 실패")
+                    return
+                pix = list(img.convert("L").getdata())
+                b = sum(pix) / len(pix)
+                self._log(f"[감시] 현재 밝기={b:.1f}  (임계값={self.v_black_thresh.get()} 미만이면 검정화면)")
+            except Exception as e:
+                self._log(f"[감시] 오류: {e}")
+        threading.Thread(target=_run, daemon=True).start()
 
     # ── 공통 위젯 헬퍼 ───────────────────────────────────
     def _field(self, parent, title, desc, default, row):
@@ -692,9 +982,24 @@ class App(tk.Tk):
             target=lambda: keyboard.Listener(on_press=on_press).run(),
             daemon=True).start()
 
+    def _stop_all(self):
+        """검정화면 감지 시 콜백 — 매크로+평타 즉시 정지"""
+        if self.engine.running:
+            self.engine.stop()
+            self.after(0, lambda: (
+                self._dot.config(fg=RED),
+                self._status.config(text="  정지됨 (화면감지)"),
+                self._btn.config(text="▶   시 작   (F8)", bg=GRN),
+            ))
+        if self.natk.running:
+            self.natk.stop()
+            self.after(0, lambda: self._natk_btn.config(
+                text="▶  평타 ON", bg=BLU))
+
     def _on_close(self):
         self.engine.stop()
         self.natk.stop()
+        self.watcher.stop()
         self.destroy()
 
 
