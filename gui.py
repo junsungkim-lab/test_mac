@@ -137,14 +137,20 @@ class MacroEngine:
                     cfg["mm_x"], cfg["mm_y"],
                     cfg["mm_w"], cfg["mm_h"])
                 if char_x is not None:
-                    buf = cfg["bd_buffer"]
-                    self.log(f"[경계] 미니맵 X={char_x} "
-                             f"(안전구역 {cfg['bd_left']+buf}~{cfg['bd_right']-buf})")
-                    # 버퍼 포함해서 미리 보정 → 이동 중 튀어나가는 것 방지
-                    if char_x <= cfg["bd_left"] + buf:
-                        forced_dir = "right"
-                    elif char_x >= cfg["bd_right"] - buf:
-                        forced_dir = "left"
+                    center = cfg.get("center_x", 0)
+                    buf    = cfg["bd_buffer"]
+                    if center > 0:
+                        # 중앙 기준: 항상 중앙 방향으로 이동 → 절대 끝으로 안 감
+                        forced_dir = "right" if char_x <= center else "left"
+                        self.log(f"[경계] 미니맵 X={char_x}  중앙={center} → {'→' if forced_dir=='right' else '←'}")
+                    else:
+                        # 버퍼 방식 (center_x=0 일 때 유지)
+                        self.log(f"[경계] 미니맵 X={char_x} "
+                                 f"(안전구역 {cfg['bd_left']+buf}~{cfg['bd_right']-buf})")
+                        if char_x <= cfg["bd_left"] + buf:
+                            forced_dir = "right"
+                        elif char_x >= cfg["bd_right"] - buf:
+                            forced_dir = "left"
 
             # ── 4. 이동 ───────────────────────────────────
             if forced_dir:
@@ -263,16 +269,34 @@ class ScreenWatcher:
 
     # ── 내부 루프 ─────────────────────────────────────────
     def _loop(self):
+        _black_hits = 0          # 연속 검정화면 카운트
+        _lie_tick   = 0          # 거짓말탐지기는 3틱(≈0.45s)마다 체크
         while self.running and not self._stop.is_set():
             try:
                 cfg = self._cfg
+                # 검정화면: 0.15s마다, 2회 연속이면 발동
                 if cfg.get("black_on"):
-                    self._check_black(cfg)
-                if cfg.get("lie_on") and time.time() > self._lie_cooldown:
+                    img = _grab(cfg["watch_x"], cfg["watch_y"],
+                                cfg["watch_w"], cfg["watch_h"])
+                    if img is not None:
+                        b = self._brightness(img)
+                        if b < cfg["black_thresh"]:
+                            _black_hits += 1
+                            if _black_hits >= 2:
+                                self.log(f"[감시] 검정화면 확인 (밝기={b:.0f}) → 매크로 정지")
+                                self.stop_macro()
+                                _black_hits = 0
+                                time.sleep(3)
+                        else:
+                            _black_hits = 0
+                # 거짓말탐지기: 3틱(≈0.45s)마다
+                _lie_tick += 1
+                if cfg.get("lie_on") and _lie_tick >= 3 and time.time() > self._lie_cooldown:
+                    _lie_tick = 0
                     self._check_lie(cfg)
             except Exception as e:
                 self.log(f"[감시오류] {e}")
-            time.sleep(0.4)
+            time.sleep(0.15)
 
     # ── 공통 유틸 ─────────────────────────────────────────
     @staticmethod
@@ -619,6 +643,8 @@ class App(tk.Tk):
                                        "이 값 이상이면 강제 왼쪽 이동", "180", 1)
         self.v_bd_buffer = self._field(frm2, "안전 여유 (px)",
                                        "한계보다 이 값만큼 미리 방향 전환 → 이탈 방지", "15", 2)
+        self.v_center_x  = self._field(frm2, "중앙 X 좌표 (권장)",
+                                       "0 이면 위 한계값 방식 사용. 설정하면 항상 중앙으로 수렴", "0", 3)
 
         self._hsep(parent)
 
@@ -965,6 +991,7 @@ class App(tk.Tk):
                 "bd_left":           int(self.v_bd_left.get()),
                 "bd_right":          int(self.v_bd_right.get()),
                 "bd_buffer":         int(self.v_bd_buffer.get()),
+                "center_x":          int(self.v_center_x.get()),
             }
         except ValueError:
             self._log("[오류] 숫자를 올바르게 입력하세요")
