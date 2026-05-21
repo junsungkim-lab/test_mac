@@ -130,54 +130,71 @@ class MacroEngine:
             # ── 2. 후딜레이 대기 ──────────────────────────
             time.sleep(cfg["after_skill_delay"])
 
-            # ── 3. 경계 확인 (미니맵, 선택사항) ────────────
-            forced_dir = None
+            # ── 3. 경계 / 위치 확인 ──────────────────────────
+            char_x = None
             if cfg["boundary_on"]:
                 char_x = find_char_x_minimap(
                     cfg["mm_x"], cfg["mm_y"],
                     cfg["mm_w"], cfg["mm_h"])
-                if char_x is not None:
-                    center = cfg.get("center_x", 0)
-                    buf    = cfg["bd_buffer"]
-                    if center > 0:
-                        # 중앙 기준: 항상 중앙 방향으로 이동 → 절대 끝으로 안 감
-                        forced_dir = "right" if char_x <= center else "left"
-                        self.log(f"[경계] 미니맵 X={char_x}  중앙={center} → {'→' if forced_dir=='right' else '←'}")
-                    else:
-                        # 버퍼 방식 (center_x=0 일 때 유지)
-                        self.log(f"[경계] 미니맵 X={char_x} "
-                                 f"(안전구역 {cfg['bd_left']+buf}~{cfg['bd_right']-buf})")
-                        if char_x <= cfg["bd_left"] + buf:
-                            forced_dir = "right"
-                        elif char_x >= cfg["bd_right"] - buf:
-                            forced_dir = "left"
+
+            dur    = random.uniform(cfg["move_min"], cfg["move_max"])
+            center = cfg.get("center_x", 0)
 
             # ── 4. 이동 ───────────────────────────────────
-            if forced_dir:
-                move_dir = forced_dir
-                self._last_dir = "left" if forced_dir == "right" else "right"
+            if cfg["boundary_on"] and center > 0 and char_x is not None:
+                # ▶ 중앙 수렴 모드: 중앙 방향 full, 복귀는 25% → 실제로 중앙으로 이동
+                go_right  = char_x <= center
+                go_key    = Key.right if go_right else Key.left
+                back_key  = Key.left  if go_right else Key.right
+                back_dur  = dur * 0.25
+                arrow     = "→" if go_right else "←"
+                self.log(f"[이동] {arrow}중앙 X={char_x}→{center}  go={dur:.2f}s back={back_dur:.2f}s")
+                with kb_lock:
+                    kb.press(go_key)
+                time.sleep(dur)
+                with kb_lock:
+                    kb.release(go_key)
+                time.sleep(0.08)
+                with kb_lock:
+                    kb.press(back_key)
+                time.sleep(back_dur)
+                with kb_lock:
+                    kb.release(back_key)
+
             else:
-                move_dir = self._last_dir
-                self._last_dir = "right" if self._last_dir == "left" else "left"
+                # ▶ 기존 대칭 이동 (경계 OFF 또는 center_x=0)
+                forced_dir = None
+                if cfg["boundary_on"] and char_x is not None:
+                    buf = cfg["bd_buffer"]
+                    if char_x <= cfg["bd_left"] + buf:
+                        forced_dir = "right"
+                    elif char_x >= cfg["bd_right"] - buf:
+                        forced_dir = "left"
+                    if forced_dir:
+                        self.log(f"[경계] X={char_x} → 강제 {forced_dir}")
 
-            go   = Key.left  if move_dir == "left" else Key.right
-            back = Key.right if move_dir == "left" else Key.left
-            arrow = "←" if move_dir == "left" else "→"
-            dur  = random.uniform(cfg["move_min"], cfg["move_max"])
+                if forced_dir:
+                    move_dir = forced_dir
+                    self._last_dir = "left" if forced_dir == "right" else "right"
+                else:
+                    move_dir = self._last_dir
+                    self._last_dir = "right" if self._last_dir == "left" else "left"
 
-            self.log(f"[이동] {arrow} {dur:.2f}초"
-                     + (" ← 경계보정" if forced_dir else ""))
-            with kb_lock:
-                kb.press(go)
-            time.sleep(dur)
-            with kb_lock:
-                kb.release(go)
-            time.sleep(0.08)
-            with kb_lock:
-                kb.press(back)
-            time.sleep(dur)
-            with kb_lock:
-                kb.release(back)
+                go    = Key.left  if move_dir == "left" else Key.right
+                back  = Key.right if move_dir == "left" else Key.left
+                arrow = "←" if move_dir == "left" else "→"
+                self.log(f"[이동] {arrow} {dur:.2f}초")
+                with kb_lock:
+                    kb.press(go)
+                time.sleep(dur)
+                with kb_lock:
+                    kb.release(go)
+                time.sleep(0.08)
+                with kb_lock:
+                    kb.press(back)
+                time.sleep(dur)
+                with kb_lock:
+                    kb.release(back)
 
             # ── 5. 대기 ───────────────────────────────────
             pause = random.uniform(cfg["pause_min"], cfg["pause_max"])
