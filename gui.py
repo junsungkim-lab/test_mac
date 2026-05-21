@@ -139,47 +139,29 @@ class MacroEngine:
 
             dur    = random.uniform(cfg["move_min"], cfg["move_max"])
             center = cfg.get("center_x", 0)
+            buf    = cfg["bd_buffer"]
 
             # ── 4. 이동 ───────────────────────────────────
-            if cfg["boundary_on"] and center > 0 and char_x is not None:
-                # ▶ 중앙 수렴 모드: 중앙 방향 full, 복귀는 25% → 실제로 중앙으로 이동
-                go_right  = char_x <= center
-                go_key    = Key.right if go_right else Key.left
-                back_key  = Key.left  if go_right else Key.right
-                back_dur  = dur * 0.25
-                arrow     = "→" if go_right else "←"
-                self.log(f"[이동] {arrow}중앙 X={char_x}→{center}  go={dur:.2f}s back={back_dur:.2f}s")
+            near_boundary = (
+                cfg["boundary_on"] and center > 0 and char_x is not None
+                and (char_x <= cfg["bd_left"] + buf or char_x >= cfg["bd_right"] - buf)
+            )
+
+            if near_boundary:
+                # ▶ 경계 근처: 중앙 방향으로만 이동, 복귀 없음
+                go_key = Key.right if char_x <= center else Key.left
+                arrow  = "→" if char_x <= center else "←"
+                self.log(f"[경계→중앙] X={char_x} center={center} {arrow} {dur:.2f}s")
                 with kb_lock:
                     kb.press(go_key)
                 time.sleep(dur)
                 with kb_lock:
                     kb.release(go_key)
-                time.sleep(0.08)
-                with kb_lock:
-                    kb.press(back_key)
-                time.sleep(back_dur)
-                with kb_lock:
-                    kb.release(back_key)
 
             else:
-                # ▶ 기존 대칭 이동 (경계 OFF 또는 center_x=0)
-                forced_dir = None
-                if cfg["boundary_on"] and char_x is not None:
-                    buf = cfg["bd_buffer"]
-                    if char_x <= cfg["bd_left"] + buf:
-                        forced_dir = "right"
-                    elif char_x >= cfg["bd_right"] - buf:
-                        forced_dir = "left"
-                    if forced_dir:
-                        self.log(f"[경계] X={char_x} → 강제 {forced_dir}")
-
-                if forced_dir:
-                    move_dir = forced_dir
-                    self._last_dir = "left" if forced_dir == "right" else "right"
-                else:
-                    move_dir = self._last_dir
-                    self._last_dir = "right" if self._last_dir == "left" else "left"
-
+                # ▶ 안전 구역: 정상 대칭 이동 (좌우 왔다갔다)
+                move_dir = self._last_dir
+                self._last_dir = "right" if self._last_dir == "left" else "left"
                 go    = Key.left  if move_dir == "left" else Key.right
                 back  = Key.right if move_dir == "left" else Key.left
                 arrow = "←" if move_dir == "left" else "→"
